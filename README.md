@@ -48,6 +48,9 @@ ADMIN_USER_IDS=123456789
 python bot.py
 ```
 
+> Важливо: без ключів LiqPay/WayForPay/CRM/Nova Poshta бот **все одно працює**.  
+> Ці інтеграції опціональні — без них буде лише базовий функціонал магазину.
+
 ---
 
 ## 2) Налаштування бази даних (PostgreSQL/MySQL)
@@ -201,4 +204,3 @@ NOVA_POSHTA_API_KEY=...
 - `data/catalog.json` — стартовий каталог.
 - `data/news.json` — новини.
 - `data/contacts.json` — контакти.
-

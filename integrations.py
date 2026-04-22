@@ -2,10 +2,10 @@ import base64
 import hashlib
 import json
 import os
+from urllib.error import HTTPError, URLError
+from urllib.request import Request, urlopen
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
-
-import requests
 
 
 @dataclass
@@ -85,9 +85,7 @@ class PaymentService:
         }
 
         try:
-            response = requests.post("https://api.wayforpay.com/api", json=payload, timeout=15)
-            response.raise_for_status()
-            data = response.json()
+            data = post_json("https://api.wayforpay.com/api", payload, timeout=15)
         except Exception as exc:
             return PaymentResult(ok=False, message=f"WayForPay помилка: {exc}")
 
@@ -106,8 +104,7 @@ class CRMService:
             return "CRM_WEBHOOK_URL не задано — пропускаю інтеграцію з CRM."
 
         try:
-            response = requests.post(self.webhook_url, json=order_payload, timeout=15)
-            response.raise_for_status()
+            post_json(self.webhook_url, order_payload, timeout=15)
             return "Дані замовлення відправлено в CRM."
         except Exception as exc:
             return f"Не вдалося відправити замовлення в CRM: {exc}"
@@ -131,9 +128,7 @@ class NovaPoshtaService:
         }
 
         try:
-            response = requests.post(self.API_URL, json=payload, timeout=15)
-            response.raise_for_status()
-            data = response.json()
+            data = post_json(self.API_URL, payload, timeout=15)
         except Exception as exc:
             return {"ok": False, "message": f"Помилка запиту до Nova Poshta API: {exc}"}
 
@@ -143,3 +138,21 @@ class NovaPoshtaService:
         items = data.get("data", [])
         lines = [f"{item.get('Number')}: {item.get('Description')}" for item in items]
         return {"ok": True, "items": lines}
+
+
+def post_json(url: str, payload: Dict[str, Any], timeout: int = 15) -> Dict[str, Any]:
+    req = Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urlopen(req, timeout=timeout) as response:
+            raw = response.read().decode("utf-8")
+            return json.loads(raw) if raw else {}
+    except HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"HTTP {exc.code}: {body}") from exc
+    except URLError as exc:
+        raise RuntimeError(f"Network error: {exc.reason}") from exc
