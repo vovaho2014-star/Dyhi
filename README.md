@@ -10,11 +10,28 @@
 
 ## 1) Швидкий старт
 
+### Linux / macOS
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
+```
+
+### Windows (cmd)
+```bat
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+copy .env.example .env
+```
+
+### Windows (PowerShell)
+```powershell
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+Copy-Item .env.example .env
 ```
 
 У `.env` вставте токен:
@@ -28,6 +45,9 @@ TELEGRAM_BOT_TOKEN=ВАШ_ТОКЕН
 ```bash
 python bot.py
 ```
+
+> Якщо забули створити `.env`, бот попросить вставити токен прямо в консолі під час запуску.
+> Якщо токен вставлений некоректно, бот покаже підказку з прикладом формату токена.
 
 ## 2) Де зберігаються дані
 

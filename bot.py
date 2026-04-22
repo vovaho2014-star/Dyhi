@@ -1,11 +1,12 @@
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Dict
 
 from dotenv import load_dotenv
-from telegram import KeyboardButton, ReplyKeyboardMarkup, ReplyKeyboardRemove, Update
+from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -216,7 +217,29 @@ def build_app() -> Application:
     load_dotenv()
     token = os.getenv("TELEGRAM_BOT_TOKEN")
     if not token:
-        raise RuntimeError("Не знайдено TELEGRAM_BOT_TOKEN. Створіть .env на основі .env.example")
+        token = os.getenv("BOT_TOKEN")
+
+    if not token and sys.stdin.isatty():
+        print(
+            "ℹ️ TELEGRAM_BOT_TOKEN не знайдено. "
+            "Вставте токен бота (можна отримати у @BotFather):"
+        )
+        token = input("TELEGRAM_BOT_TOKEN: ").strip()
+
+    if not token:
+        raise RuntimeError(
+            "Не знайдено TELEGRAM_BOT_TOKEN.\n"
+            "Швидке виправлення:\n"
+            "1) Створіть файл .env у папці з bot.py\n"
+            "2) Додайте рядок: TELEGRAM_BOT_TOKEN=ВАШ_ТОКЕН\n"
+            "3) Запустіть знову: python bot.py"
+        )
+    if ":" not in token:
+        raise RuntimeError(
+            "Схоже, токен має неправильний формат.\n"
+            "Приклад валідного токена: 123456789:AA...\n"
+            "Перевірте токен у @BotFather і запустіть бот ще раз."
+        )
 
     app = Application.builder().token(token).build()
 
