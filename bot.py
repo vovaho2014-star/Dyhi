@@ -7,6 +7,8 @@ from pathlib import Path
 from typing import Dict, List, Set
 
 from dotenv import load_dotenv
+from integrations import CRMService, NovaPoshtaService, PaymentService
+from storage import Storage
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
 from telegram.error import Conflict, InvalidToken, NetworkError, TelegramError
 from telegram.ext import (
@@ -37,7 +39,8 @@ MENU_CANCEL = "❌ Скасувати"
     ORDER_PHONE,
     ORDER_ADDRESS,
     ORDER_COMMENT,
-) = range(6)
+    ORDER_DELIVERY,
+) = range(7)
 
 (
     ADMIN_MENU,
@@ -57,6 +60,9 @@ ADMIN_CHANGE_PRICE = "💰 Змінити ціну"
 ADMIN_TOGGLE_AVAILABILITY = "📦 Перемкнути наявність"
 ADMIN_REMOVE_ITEM = "🗑 Видалити товар"
 ADMIN_EXIT = "↩️ Вийти"
+
+DELIVERY_COURIER = "🚚 Курʼєр"
+DELIVERY_NOVA_POSHTA = "📦 Nova Poshta"
 
 
 def load_json(filename: str):
@@ -132,6 +138,10 @@ def catalog_lines(catalog: List[dict]) -> List[str]:
     return lines
 
 
+def get_storage(context: ContextTypes.DEFAULT_TYPE) -> Storage:
+    return context.application.bot_data["storage"]
+
+
 def format_catalog_item(item: dict) -> str:
     stock_status = "✅ В наявності" if item["in_stock"] else "⛔ Немає в наявності"
     return (
@@ -152,13 +162,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def show_catalog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    catalog = load_catalog()
+    catalog = get_storage(context).get_catalog()
     text = "\n\n".join(format_catalog_item(item) for item in catalog)
     await update.message.reply_text(text)
 
 
 async def show_prices(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    catalog = load_catalog()
+    catalog = get_storage(context).get_catalog()
     lines = ["💵 Активні ціни:"]
     for item in catalog:
         availability = "✅" if item["in_stock"] else "⛔"
@@ -247,6 +257,22 @@ async def order_address(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         return await cancel_order(update, context)
 
     context.user_data["address"] = update.message.text
+    await update.message.reply_text(
+        "Оберіть спосіб доставки:",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton(DELIVERY_COURIER), KeyboardButton(DELIVERY_NOVA_POSHTA)]],
+            resize_keyboard=True,
+        ),
+    )
+    return ORDER_DELIVERY
+
+
+async def order_delivery(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    delivery = update.message.text
+    if delivery not in {DELIVERY_COURIER, DELIVERY_NOVA_POSHTA}:
+        await update.message.reply_text("Оберіть спосіб доставки кнопками.")
+        return ORDER_DELIVERY
+    context.user_data["delivery"] = delivery
     await update.message.reply_text("Коментар до замовлення (або '-' якщо немає):")
     return ORDER_COMMENT
 
@@ -257,22 +283,59 @@ async def order_comment(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     context.user_data["comment"] = update.message.text
     order = context.user_data
+    catalog = get_storage(context).get_catalog()
+    unit_price = next((i["price_uah"] for i in catalog if i["name"] == order["product"]), 0)
+    order["unit_price_uah"] = unit_price
+    order["delivery"] = order.get("delivery", DELIVERY_COURIER)
+    total = int(order["qty"]) * int(unit_price)
 
     summary = (
         "✅ Замовлення оформлено!\n\n"
+        f"Номер: #{order.get('id', 'new')}\n"
         f"Товар: {order['product']}\n"
         f"Кількість: {order['qty']}\n"
+        f"Ціна за одиницю: {unit_price} грн\n"
+        f"Сума: {total} грн\n"
         f"Ім'я: {order['name']}\n"
         f"Телефон: {order['phone']}\n"
         f"Адреса: {order['address']}\n"
+        f"Доставка: {order['delivery']}\n"
         f"Коментар: {order['comment']}\n\n"
         "Менеджер зв'яжеться з вами найближчим часом."
     )
 
-    save_order(order)
+    order_id = get_storage(context).save_order(order)
+    order["id"] = order_id
+    payment: PaymentService = context.application.bot_data["payment_service"]
+    payment_result = payment.create_payment(order_id, total, f"{order['product']} x{order['qty']}")
+    crm_service: CRMService = context.application.bot_data["crm_service"]
+    crm_status = crm_service.push_order(
+        {
+            "id": order_id,
+            "product": order["product"],
+            "qty": order["qty"],
+            "total_uah": total,
+            "name": order["name"],
+            "phone": order["phone"],
+            "delivery": order["delivery"],
+            "address": order["address"],
+            "comment": order["comment"],
+        }
+    )
     context.user_data.clear()
     admin_user = is_admin(context, update.effective_user.id if update.effective_user else None)
-    await update.message.reply_text(summary, reply_markup=build_main_keyboard_for_user(admin_user))
+    await update.message.reply_text(
+        summary.replace("new", str(order_id)),
+        reply_markup=build_main_keyboard_for_user(admin_user),
+    )
+    if payment_result.ok and payment_result.url:
+        await update.message.reply_text(
+            f"💳 Онлайн-оплата доступна за посиланням:\n{payment_result.url}\n\n"
+            f"Номер вашого замовлення: #{order_id}"
+        )
+    else:
+        await update.message.reply_text(f"ℹ️ Онлайн-оплату не згенеровано: {payment_result.message}")
+    await update.message.reply_text(f"CRM: {crm_status}")
     return ConversationHandler.END
 
 
@@ -313,7 +376,7 @@ async def admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int
 async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     text = update.message.text
     if text == ADMIN_LIST_ITEMS:
-        catalog = load_catalog()
+        catalog = get_storage(context).get_catalog()
         if not catalog:
             await update.message.reply_text("Каталог порожній.")
         else:
@@ -326,7 +389,7 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ADMIN_ADD_NAME
 
     if text == ADMIN_CHANGE_PRICE:
-        catalog = load_catalog()
+        catalog = get_storage(context).get_catalog()
         if not catalog:
             await update.message.reply_text("Каталог порожній.")
             return ADMIN_MENU
@@ -338,7 +401,7 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ADMIN_SET_PRICE
 
     if text == ADMIN_TOGGLE_AVAILABILITY:
-        catalog = load_catalog()
+        catalog = get_storage(context).get_catalog()
         if not catalog:
             await update.message.reply_text("Каталог порожній.")
             return ADMIN_MENU
@@ -348,7 +411,7 @@ async def admin_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
         return ADMIN_TOGGLE_STOCK
 
     if text == ADMIN_REMOVE_ITEM:
-        catalog = load_catalog()
+        catalog = get_storage(context).get_catalog()
         if not catalog:
             await update.message.reply_text("Каталог порожній.")
             return ADMIN_MENU
@@ -408,9 +471,7 @@ async def admin_add_stock(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     item = context.user_data["admin_new_item"]
     item["in_stock"] = value in {"так", "yes", "y", "1"}
-    catalog = load_catalog()
-    catalog.append(item)
-    save_catalog(catalog)
+    get_storage(context).add_product(item)
     context.user_data.pop("admin_new_item", None)
     await update.message.reply_text("✅ Товар додано до каталогу.", reply_markup=build_admin_keyboard())
     return ADMIN_MENU
@@ -422,15 +483,11 @@ async def admin_set_price(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Формат: <номер> <нова_ціна>. Приклад: 2 3499")
         return ADMIN_SET_PRICE
 
-    idx = int(parts[0]) - 1
+    idx = int(parts[0])
     new_price = int(parts[1])
-    catalog = load_catalog()
-    if idx < 0 or idx >= len(catalog) or new_price <= 0:
+    if new_price <= 0 or not get_storage(context).update_product_price_by_index(idx, new_price):
         await update.message.reply_text("Некоректний номер товару або ціна.")
         return ADMIN_SET_PRICE
-
-    catalog[idx]["price_uah"] = new_price
-    save_catalog(catalog)
     await update.message.reply_text("✅ Ціну оновлено.", reply_markup=build_admin_keyboard())
     return ADMIN_MENU
 
@@ -441,15 +498,12 @@ async def admin_toggle_stock(update: Update, context: ContextTypes.DEFAULT_TYPE)
         await update.message.reply_text("Введіть номер товару цифрою.")
         return ADMIN_TOGGLE_STOCK
 
-    idx = int(value) - 1
-    catalog = load_catalog()
-    if idx < 0 or idx >= len(catalog):
+    idx = int(value)
+    status_value = get_storage(context).toggle_stock_by_index(idx)
+    if status_value is None:
         await update.message.reply_text("Некоректний номер товару.")
         return ADMIN_TOGGLE_STOCK
-
-    catalog[idx]["in_stock"] = not catalog[idx]["in_stock"]
-    save_catalog(catalog)
-    status = "в наявності" if catalog[idx]["in_stock"] else "немає в наявності"
+    status = "в наявності" if status_value else "немає в наявності"
     await update.message.reply_text(
         f"✅ Статус товару змінено: {status}.", reply_markup=build_admin_keyboard()
     )
@@ -462,16 +516,13 @@ async def admin_delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text("Введіть номер товару цифрою.")
         return ADMIN_DELETE_ITEM
 
-    idx = int(value) - 1
-    catalog = load_catalog()
-    if idx < 0 or idx >= len(catalog):
+    idx = int(value)
+    removed_name = get_storage(context).delete_product_by_index(idx)
+    if removed_name is None:
         await update.message.reply_text("Некоректний номер товару.")
         return ADMIN_DELETE_ITEM
-
-    removed = catalog.pop(idx)
-    save_catalog(catalog)
     await update.message.reply_text(
-        f"✅ Товар '{removed['name']}' видалено.", reply_markup=build_admin_keyboard()
+        f"✅ Товар '{removed_name}' видалено.", reply_markup=build_admin_keyboard()
     )
     return ADMIN_MENU
 
@@ -480,6 +531,25 @@ async def admin_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> in
     context.user_data.pop("admin_new_item", None)
     await update.message.reply_text("Дію скасовано.", reply_markup=build_admin_keyboard())
     return ADMIN_MENU
+
+
+async def np_warehouses(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    city = " ".join(context.args).strip()
+    if not city:
+        await update.message.reply_text("Використання: /np Київ")
+        return
+
+    service: NovaPoshtaService = context.application.bot_data["nova_poshta_service"]
+    result = service.find_warehouses(city)
+    if not result.get("ok"):
+        await update.message.reply_text(f"❌ {result.get('message')}")
+        return
+
+    lines = result.get("items", [])
+    if not lines:
+        await update.message.reply_text("Не знайдено відділень для цього міста.")
+        return
+    await update.message.reply_text("📦 Відділення Nova Poshta:\n" + "\n".join(lines[:10]))
 
 
 def build_app() -> Application:
@@ -511,7 +581,11 @@ def build_app() -> Application:
         )
 
     app = Application.builder().token(token).build()
+    app.bot_data["storage"] = Storage(os.getenv("DATABASE_URL"))
     app.bot_data["admin_ids"] = parse_admin_ids(os.getenv("ADMIN_USER_IDS"))
+    app.bot_data["payment_service"] = PaymentService()
+    app.bot_data["crm_service"] = CRMService()
+    app.bot_data["nova_poshta_service"] = NovaPoshtaService()
 
     checkout_handler = ConversationHandler(
         entry_points=[MessageHandler(filters.Regex(f"^{MENU_CHECKOUT}$"), start_checkout)],
@@ -521,6 +595,7 @@ def build_app() -> Application:
             ORDER_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_name)],
             ORDER_PHONE: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_phone)],
             ORDER_ADDRESS: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_address)],
+            ORDER_DELIVERY: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_delivery)],
             ORDER_COMMENT: [MessageHandler(filters.TEXT & ~filters.COMMAND, order_comment)],
         },
         fallbacks=[MessageHandler(filters.Regex(f"^{MENU_CANCEL}$"), cancel_order)],
@@ -550,6 +625,7 @@ def build_app() -> Application:
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("np", np_warehouses))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_CATALOG}$"), show_catalog))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_PRICES}$"), show_prices))
     app.add_handler(MessageHandler(filters.Regex(f"^{MENU_NEWS}$"), show_news))
