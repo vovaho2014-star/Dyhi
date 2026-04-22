@@ -1,0 +1,11 @@
+name = "dyhi-telegram-bot"
+main = "src/index.ts"
+compatibility_date = "2026-04-22"
+
+[vars]
+ADMIN_USER_IDS = ""
+
+[[d1_databases]]
+binding = "DB"
+database_name = "dyhi-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
