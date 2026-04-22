@@ -1,207 +1,137 @@
-# Perfume Shop Telegram Bot
+# Perfume Shop Telegram Bot — Cloudflare Workers + D1
 
-Telegram-бот для магазину духів з такими можливостями:
-- Каталог, активні ціни, новини, контакти.
-- Оформлення замовлення.
-- Адмін-панель в Telegram для керування каталогом.
-- Підтримка бази даних (**PostgreSQL/MySQL**) через `DATABASE_URL`.
-- Онлайн-оплата (**LiqPay/WayForPay**, за наявності ключів).
-- Інтеграція з CRM через webhook.
-- Інтеграція з Nova Poshta API (команда `/np`).
+Повністю перероблена версія бота під **Cloudflare Workers** та **Cloudflare D1**.
+
+## Що вже реалізовано
+
+- Telegram webhook-бот (без polling).
+- Головне меню:
+  - 📚 Каталог
+  - 💵 Активні ціни
+  - 📰 Новини
+  - 🛒 Замовити
+  - 📞 Контакти
+  - ✅ Оформлення замовлення
+- Адмін-панель:
+  - 📋 Список товарів
+  - ➕ Додати товар (покроково)
+  - 💰 Змінити ціну (`/setprice ID ЦІНА`)
+  - 📦 Перемкнути наявність (`/stock ID`)
+  - 🗑 Видалити товар (`/delete ID`)
+- Збереження в D1:
+  - товари, новини, контакти, замовлення, user-state.
 
 ---
 
-## 1) Швидкий запуск
+## 1) Підготовка Cloudflare
 
-### Linux / macOS
+1. Створіть акаунт Cloudflare.
+2. Встановіть Node.js 20+.
+3. Встановіть залежності:
+   ```bash
+   npm install
+   ```
+4. Авторизуйтесь у Cloudflare:
+   ```bash
+   npx wrangler login
+   ```
+
+---
+
+## 2) Створення D1 бази
+
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
+npx wrangler d1 create dyhi-db
 ```
 
-### Windows (cmd)
-```bat
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-copy .env.example .env
-```
+Скопіюйте `database_id` з output і вставте в `wrangler.toml` у `[[d1_databases]]`.
 
-### Windows (PowerShell)
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-Copy-Item .env.example .env
-```
+Потім застосуйте схему:
 
-В `.env` мінімально потрібно:
-```env
-TELEGRAM_BOT_TOKEN=ВАШ_ТОКЕН
-ADMIN_USER_IDS=123456789
-```
-
-Запуск:
 ```bash
-python bot.py
+npx wrangler d1 execute dyhi-db --remote --file=schema.sql
+npx wrangler d1 execute dyhi-db --remote --file=seed.sql
 ```
-
-> Важливо: без ключів LiqPay/WayForPay/CRM/Nova Poshta бот **все одно працює**.  
-> Ці інтеграції опціональні — без них буде лише базовий функціонал магазину.
-> Якщо не встановлено SQLAlchemy або `DATABASE_URL` порожній — бот автоматично працює в JSON-режимі.
 
 ---
 
-## 2) Налаштування бази даних (PostgreSQL/MySQL)
+## 3) Secrets і змінні
 
-Бот працює у двох режимах:
-1. **Без `DATABASE_URL`**: використовує JSON (`data/catalog.json`, `data/orders.json`).
-2. **З `DATABASE_URL`**: використовує SQLAlchemy + БД.
+Задайте секрети:
 
-### PostgreSQL
-1. Створіть БД (наприклад `dyhi`).
-2. Додайте в `.env`:
-```env
-DATABASE_URL=postgresql+psycopg2://user:password@localhost:5432/dyhi
+```bash
+npx wrangler secret put TELEGRAM_BOT_TOKEN
+npx wrangler secret put TELEGRAM_WEBHOOK_SECRET
 ```
 
-### MySQL
-1. Створіть БД (UTF-8, бажано `utf8mb4`).
-2. Додайте в `.env`:
-```env
-DATABASE_URL=mysql+pymysql://user:password@localhost:3306/dyhi?charset=utf8mb4
-```
+Задайте адмінів у `wrangler.toml`:
 
-### Як працює міграція даних
-- При першому старті бот створює таблиці автоматично.
-- Якщо таблиця товарів порожня, вона заповнюється даними з `data/catalog.json`.
+```toml
+[vars]
+ADMIN_USER_IDS = "123456789,987654321"
+```
 
 ---
 
-## 3) Адмін-панель каталогу в Telegram
+## 4) Деплой
 
-### Доступ
-- Додайте ваш Telegram `user_id` у `ADMIN_USER_IDS`.
-- `user_id` можна отримати через @userinfobot.
-
-### Як відкрити панель
-- Кнопка **🛠 Адмін-панель** (видно тільки адмінам), або
-- Команда `/admin`.
-
-### Можливості
-- **📋 Список товарів** — показує товари з номерами.
-- **➕ Додати товар** — покроково: назва → об’єм → ціна → опис → наявність.
-- **💰 Змінити ціну** — формат `номер ціна` (напр. `2 3499`).
-- **📦 Перемкнути наявність** — введіть `номер`.
-- **🗑 Видалити товар** — введіть `номер`.
-
----
-
-## 4) Онлайн-оплата (LiqPay / WayForPay)
-
-Після оформлення замовлення бот пробує згенерувати посилання на оплату.
-
-### LiqPay
-У `.env`:
-```env
-PAYMENT_PROVIDER=liqpay
-LIQPAY_PUBLIC_KEY=...
-LIQPAY_PRIVATE_KEY=...
-LIQPAY_SERVER_URL=https://your-domain.com/payment/callback
+```bash
+npm run deploy
 ```
 
-### WayForPay
-У `.env`:
-```env
-PAYMENT_PROVIDER=wayforpay
-WAYFORPAY_MERCHANT_ACCOUNT=...
-WAYFORPAY_SECRET_KEY=...
-WAYFORPAY_RETURN_URL=https://your-domain.com/payment/callback
-```
+Після деплою отримаєте URL, наприклад:
 
-> Якщо ключі не задано, бот не падає — просто повідомить, що оплату не згенеровано.
-
----
-
-## 5) Інтеграція з CRM
-
-Після створення замовлення бот надсилає payload у CRM webhook (якщо налаштовано).
-
-У `.env`:
-```env
-CRM_WEBHOOK_URL=https://your-crm.example.com/webhooks/orders
-```
-
-### Формат payload (приклад)
-```json
-{
-  "id": 15,
-  "product": "Dior Sauvage",
-  "qty": 2,
-  "total_uah": 9780,
-  "name": "Іван",
-  "phone": "+380...",
-  "delivery": "📦 Nova Poshta",
-  "address": "Київ, відділення 12",
-  "comment": "Передзвоніть"
-}
-```
-
-Якщо webhook не відповідає, бот покаже статус-помилку, але замовлення все одно збережеться.
-
----
-
-## 6) Інтеграція з Nova Poshta API
-
-Підтримується запит відділень командою:
 ```text
-/np Київ
+https://dyhi-telegram-bot.<your-subdomain>.workers.dev
 ```
-
-У `.env`:
-```env
-NOVA_POSHTA_API_KEY=...
-```
-
-Бот повертає до 10 відділень для вказаного міста.
 
 ---
 
-## 7) Рекомендований production-процес (детально)
+## 5) Прив’язка Telegram webhook
 
-1. **Git-процес**
-   - Один раз: `git clone`.
-   - Далі: `git pull` для оновлень.
+Викличте endpoint встановлення webhook:
 
-2. **Секрети**
-   - Тримайте `.env` лише на сервері.
-   - Не комітьте токени/ключі в Git.
+```bash
+curl -X POST "https://dyhi-telegram-bot.<your-subdomain>.workers.dev/telegram/set-webhook" \
+  -H "content-type: application/json" \
+  -d '{"url":"https://dyhi-telegram-bot.<your-subdomain>.workers.dev/telegram/webhook"}'
+```
 
-3. **Стабільний запуск 24/7**
-   - Linux VPS + `systemd` (`Restart=always`).
-   - Або PaaS (Render/Railway/Fly.io) із змінними оточення.
-
-4. **Бекапи**
-   - Якщо без БД: копіюйте `data/orders.json`.
-   - Якщо з БД: регулярний `pg_dump`/`mysqldump`.
-
-5. **Моніторинг**
-   - Логи помилок Telegram API.
-   - Логи CRM/Nova Poshta інтеграцій.
-
-6. **Безпека**
-   - Якщо токен опубліковано — одразу revoke/new token через @BotFather.
-   - Обмежуйте список `ADMIN_USER_IDS`.
+Тепер Telegram буде слати апдейти напряму у Worker.
 
 ---
 
-## 8) Файли проєкту
+## 6) Локальний запуск (опціонально)
 
-- `bot.py` — основна логіка Telegram-бота.
-- `storage.py` — шар зберігання (JSON або SQL БД).
-- `integrations.py` — оплата, CRM webhook, Nova Poshta API.
-- `data/catalog.json` — стартовий каталог.
-- `data/news.json` — новини.
-- `data/contacts.json` — контакти.
+1. Створіть `.dev.vars` на основі `.dev.vars.example`.
+2. Запустіть:
+
+```bash
+npm run dev
+```
+
+---
+
+## 7) Структура проєкту
+
+- `src/index.ts` — весь бот (webhook + меню + state machine + D1 queries).
+- `schema.sql` — створення таблиць.
+- `seed.sql` — стартові дані.
+- `wrangler.toml` — конфіг Worker + D1 binding.
+- `.dev.vars.example` — приклад локальних секретів.
+
+---
+
+## 8) Важливо по безпеці
+
+- Токен Telegram не зберігайте в git.
+- Якщо токен колись злився — перевипустіть в @BotFather.
+- Використовуйте `TELEGRAM_WEBHOOK_SECRET`, щоб відсікати сторонні POST-запити.
+
+---
+
+## 9) Що легко додати далі
+
+- Реальну Nova Poshta API інтеграцію (з API ключем).
+- LiqPay/WayForPay/Stripe checkout links.
+- CRM webhook з retry-чергою через Cloudflare Queues.
