@@ -3,6 +3,3 @@
 __pycache__/
 *.pyc
 data/orders.json
-node_modules/
-.wrangler/
-.dev.vars
