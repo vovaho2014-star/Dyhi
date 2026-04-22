@@ -1,0 +1,26 @@
+[
+  {
+    "id": "p001",
+    "name": "Chanel Coco Mademoiselle",
+    "volume_ml": 50,
+    "price_uah": 5290,
+    "in_stock": true,
+    "description": "Квітково-східний аромат із цитрусами, трояндою та пачулі."
+  },
+  {
+    "id": "p002",
+    "name": "Dior Sauvage",
+    "volume_ml": 100,
+    "price_uah": 4890,
+    "in_stock": true,
+    "description": "Свіжий деревно-пряний аромат з бергамотом і амброксаном."
+  },
+  {
+    "id": "p003",
+    "name": "YSL Libre",
+    "volume_ml": 90,
+    "price_uah": 4590,
+    "in_stock": false,
+    "description": "Квітковий аромат з лавандою, апельсиновим цвітом і ваніллю."
+  }
+]
