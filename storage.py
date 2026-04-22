@@ -1,43 +1,56 @@
+import importlib
+import importlib.util
 import json
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from sqlalchemy import Boolean, Integer, String, Text, create_engine, select
-from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
-
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 
+HAS_SQLALCHEMY = importlib.util.find_spec("sqlalchemy") is not None
 
-class Base(DeclarativeBase):
-    pass
+if HAS_SQLALCHEMY:
+    sqlalchemy = importlib.import_module("sqlalchemy")
+    sqlalchemy_orm = importlib.import_module("sqlalchemy.orm")
 
+    Boolean = sqlalchemy.Boolean
+    Integer = sqlalchemy.Integer
+    String = sqlalchemy.String
+    Text = sqlalchemy.Text
+    create_engine = sqlalchemy.create_engine
+    select = sqlalchemy.select
 
-class Product(Base):
-    __tablename__ = "products"
+    DeclarativeBase = sqlalchemy_orm.DeclarativeBase
+    Mapped = sqlalchemy_orm.Mapped
+    Session = sqlalchemy_orm.Session
+    mapped_column = sqlalchemy_orm.mapped_column
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    sku: Mapped[str] = mapped_column(String(64), unique=True)
-    name: Mapped[str] = mapped_column(String(255))
-    volume_ml: Mapped[int] = mapped_column(Integer)
-    price_uah: Mapped[int] = mapped_column(Integer)
-    in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
-    description: Mapped[str] = mapped_column(Text)
+    class Base(DeclarativeBase):
+        pass
 
+    class Product(Base):
+        __tablename__ = "products"
 
-class Order(Base):
-    __tablename__ = "orders"
+        id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+        sku: Mapped[str] = mapped_column(String(64), unique=True)
+        name: Mapped[str] = mapped_column(String(255))
+        volume_ml: Mapped[int] = mapped_column(Integer)
+        price_uah: Mapped[int] = mapped_column(Integer)
+        in_stock: Mapped[bool] = mapped_column(Boolean, default=True)
+        description: Mapped[str] = mapped_column(Text)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    product: Mapped[str] = mapped_column(String(255))
-    qty: Mapped[int] = mapped_column(Integer)
-    customer_name: Mapped[str] = mapped_column(String(255))
-    phone: Mapped[str] = mapped_column(String(64))
-    address: Mapped[str] = mapped_column(Text)
-    comment: Mapped[str] = mapped_column(Text)
-    total_uah: Mapped[int] = mapped_column(Integer)
+    class Order(Base):
+        __tablename__ = "orders"
+
+        id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+        product: Mapped[str] = mapped_column(String(255))
+        qty: Mapped[int] = mapped_column(Integer)
+        customer_name: Mapped[str] = mapped_column(String(255))
+        phone: Mapped[str] = mapped_column(String(64))
+        address: Mapped[str] = mapped_column(Text)
+        comment: Mapped[str] = mapped_column(Text)
+        total_uah: Mapped[int] = mapped_column(Integer)
 
 
 @dataclass
@@ -46,7 +59,14 @@ class Storage:
 
     def __post_init__(self) -> None:
         self._engine = None
-        if self.database_url:
+        self.db_enabled = bool(self.database_url and HAS_SQLALCHEMY)
+        if self.database_url and not HAS_SQLALCHEMY:
+            print(
+                "⚠️ DATABASE_URL задано, але SQLAlchemy не встановлено. "
+                "Працюю в JSON-режимі. Встановіть залежності: pip install -r requirements.txt"
+            )
+
+        if self.db_enabled:
             self._engine = create_engine(self.database_url, future=True)
             Base.metadata.create_all(self._engine)
             self._seed_products_if_empty()
@@ -64,7 +84,8 @@ class Storage:
             json.dump(data, file, ensure_ascii=False, indent=2)
 
     def _seed_products_if_empty(self) -> None:
-        assert self._engine is not None
+        if not self._engine:
+            return
         with Session(self._engine) as session:
             existing = session.scalar(select(Product.id).limit(1))
             if existing:
