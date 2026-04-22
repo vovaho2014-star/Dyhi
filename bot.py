@@ -7,6 +7,7 @@ from typing import Dict
 
 from dotenv import load_dotenv
 from telegram import KeyboardButton, ReplyKeyboardMarkup, Update
+from telegram.error import Conflict, InvalidToken, NetworkError, TelegramError
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -271,8 +272,43 @@ def main() -> None:
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
     )
-    app = build_app()
-    app.run_polling()
+    logger = logging.getLogger(__name__)
+
+    try:
+        app = build_app()
+        logger.info("Бот запускається. Для зупинки натисніть Ctrl+C.")
+        app.run_polling()
+    except InvalidToken:
+        print(
+            "❌ Telegram відхилив токен.\n"
+            "Перевірте значення TELEGRAM_BOT_TOKEN у .env "
+            "або перевипустіть токен у @BotFather."
+        )
+        if sys.stdin.isatty():
+            input("Натисніть Enter, щоб закрити вікно...")
+        raise
+    except Conflict:
+        print(
+            "❌ Виявлено конфлікт сесій (409 Conflict).\n"
+            "Ймовірно, бот уже запущений десь іще (інший ПК/сервер або інший скрипт).\n"
+            "Зупиніть інший процес бота та запустіть цей скрипт знову."
+        )
+        if sys.stdin.isatty():
+            input("Натисніть Enter, щоб закрити вікно...")
+        raise
+    except NetworkError as exc:
+        print(
+            "❌ Не вдалося підключитися до Telegram API.\n"
+            "Перевірте інтернет, VPN/проксі або мережеві обмеження та спробуйте ще раз."
+        )
+        if sys.stdin.isatty():
+            input("Натисніть Enter, щоб закрити вікно...")
+        raise exc
+    except TelegramError as exc:
+        print(f"❌ Помилка Telegram API: {exc}")
+        if sys.stdin.isatty():
+            input("Натисніть Enter, щоб закрити вікно...")
+        raise
 
 
 if __name__ == "__main__":
